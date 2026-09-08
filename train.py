@@ -113,6 +113,11 @@ def main():
         callbacks=[checkpoint, early_stop]
     )
     
+    # Ensure model is saved
+    if not os.path.exists(checkpoint_path):
+        cnn_model.save(checkpoint_path)
+    print(f"Model saved to {checkpoint_path}")
+
     # Save training graphs
     plot_history(history)
     print("Training finished!")

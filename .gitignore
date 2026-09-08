@@ -1,0 +1,23 @@
+# Virtual environment
+venv/
+env/
+ENV/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+
+# Dataset (audio binaries generated via setup_kaggle_dataset.py)
+dataset/
+for-2sec/
+
+# Temporary files
+*.tmp
+tmp/

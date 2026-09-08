@@ -56,6 +56,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+@st.cache_resource
 def load_model_fresh_v4():
     """Load the Keras model dynamically from the filesystem."""
     model_path = "models/deepfake_audio_detector.h5"
@@ -111,19 +112,37 @@ def main():
             try:
                 # 1. Preprocess
                 y, sr = preprocessing.load_audio(tmp_audio_path)
-                spec_array = preprocessing.extract_mel_spectrogram(y, sr)  # Shape: (128, 128, 1)
+                duration_sec = len(y) / sr
                 
-                # 2. Predict
-                # Add batch dimension
-                input_tensor = np.expand_dims(spec_array, axis=0) 
-                prediction = model.predict(input_tensor)[0]
+                # 2. Multi-segment prediction across full audio duration
+                chunk_len = 16000 * 4  # 4-second analysis window
+                if len(y) > chunk_len:
+                    num_chunks = min(6, max(2, int(len(y) // chunk_len)))
+                    step = (len(y) - chunk_len) // max(1, num_chunks - 1)
+                    chunk_preds = []
+                    chunk_specs = []
+                    for i in range(num_chunks):
+                        start = i * step
+                        chunk_y = y[start:start + chunk_len]
+                        chunk_spec = preprocessing.extract_mel_spectrogram(chunk_y, sr)
+                        chunk_pred = model.predict(np.expand_dims(chunk_spec, axis=0), verbose=0)[0]
+                        chunk_preds.append(chunk_pred)
+                        chunk_specs.append(chunk_spec)
+                    
+                    prediction = np.mean(chunk_preds, axis=0)
+                    # Select most representative segment for visualization
+                    rep_idx = int(np.argmax([abs(p[0] - p[1]) for p in chunk_preds]))
+                    spec_array = chunk_specs[rep_idx]
+                else:
+                    spec_array = preprocessing.extract_mel_spectrogram(y, sr)
+                    prediction = model.predict(np.expand_dims(spec_array, axis=0), verbose=0)[0]
+                    num_chunks = 1
                 
-                # Classes: 0 -> Real, 1 -> Fake 
-                # (As defined in train.py)
-                real_confidence = prediction[0]
-                fake_confidence = prediction[1]
+                # Classes: 0 -> Real, 1 -> Fake
+                real_confidence = float(prediction[0])
+                fake_confidence = float(prediction[1])
                 
-                label = "REAL AUDIO" if real_confidence > fake_confidence else "DEEPFAKE DETECTED"
+                label = "REAL AUDIO" if real_confidence >= fake_confidence else "DEEPFAKE DETECTED"
                 confidence = max(real_confidence, fake_confidence) * 100
                 
                 # 3. Layout the Results
@@ -131,25 +150,25 @@ def main():
                 
                 with col1:
                     st.markdown("#### 📊 Spectrogram Analysis")
-                    fig = preprocessing.plot_spectrogram(y, sr, title="Mel-Spectrogram Features")
+                    fig = preprocessing.plot_spectrogram(y, sr, title=f"Mel-Spectrogram ({duration_sec:.1f}s)")
                     st.pyplot(fig)
                     
                     if use_explainability:
                         st.markdown("#### 🔍 Explainability Heatmap (Grad-CAM)")
-                        # Remove the batch and channel dim for the overlay function
-                        base_img = np.squeeze(spec_array)  
-                        heatmap = get_gradcam(model, input_tensor)
+                        base_img = np.squeeze(spec_array)
+                        heatmap = get_gradcam(model, np.expand_dims(spec_array, axis=0))
                         overlay = overlay_heatmap(heatmap, base_img)
                         st.image(overlay, caption="Regions that strongly influenced the prediction", use_container_width=True)
 
                 with col2:
                     st.markdown("#### 🎯 Classification Result")
-                    result_class = 'pred-real' if real_confidence > fake_confidence else 'pred-fake'
+                    result_class = 'pred-real' if real_confidence >= fake_confidence else 'pred-fake'
                     st.markdown(f"""
                         <div class="metric-card">
                             <div class="{result_class}">{label}</div>
                             <h2 style='margin: 10px 0;'>{confidence:.1f}% Confidence</h2>
                             <p style='color: grey;'>Real: {real_confidence*100:.1f}% | Fake: {fake_confidence*100:.1f}%</p>
+                            <p style='color: #888; font-size: 0.85rem;'>Duration: {duration_sec:.1f}s | Analyzed segments: {num_chunks}</p>
                         </div>
                     """, unsafe_allow_html=True)
                     
